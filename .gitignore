@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter / Colab
+.ipynb_checkpoints/
+
+# Dataset
+data/
+*.h5
+
+# Local PyTorch checkpoint
+models/brats_unet_modell.pth
+
+# Temporary prediction
+prediction.png
+
+# Environment
+.env
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
