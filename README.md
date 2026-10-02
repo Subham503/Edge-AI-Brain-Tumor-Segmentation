@@ -168,13 +168,15 @@ These measurements were obtained in the current CPU environment. They are **not*
 
 A representative unseen validation MRI slice was passed through the standalone INT8 inference pipeline.
 
+![INT8 Brain Tumor Segmentation Result](results/verified_prediction.png)
+
 ### Representative slice results
 
 | Measurement | Value |
-|---|---|
+|---|---:|
 | Predicted tumor pixels | 4,159 |
 | Ground-truth tumor pixels | 3,930 |
-| Dice score | 92.87% |
+| Dice score | **92.87%** |
 
 The 92.87% Dice score is for this individual MRI slice.
 
