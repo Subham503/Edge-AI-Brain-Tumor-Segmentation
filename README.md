@@ -25,7 +25,7 @@ flowchart TD
 
 ## 🎯 Objectives
 
-- Train a U-Net model for brain tumor segmentation.
+- Evaluate and optimize a pretrained U-Net model for brain tumor segmentation.
 - Evaluate the model on unseen MRI slices.
 - Export the trained PyTorch model to ONNX.
 - Verify ONNX FP32 against the original PyTorch model.
@@ -38,23 +38,43 @@ flowchart TD
 
 ## 📊 Dataset
 
-The model was trained using a BraTS-derived 2D brain MRI dataset.
+The pretrained U-Net checkpoint used in this project was trained on a processed 2D MRI dataset derived from **BraTS 2019**.
 
-| Property | Value |
-|---|---|
-| Total slices | 4,715 |
-| Image resolution | 240 × 240 |
-| Training slices | 3,772 |
-| Validation slices | 943 |
-| Split | 80/20 |
-| Input channels | 1 |
-| Output channels | 1 |
+The dataset is distributed through the Kaggle **“Brain 2D MRI Images and Mask”** dataset and contains 4,715 HDF5 (`.h5`) image–mask pairs. The original training pipeline converts the MRI slices into a binary tumor-segmentation task by treating all non-zero mask labels as tumor.
 
-The segmentation masks contain multiple non-zero tumor labels: `[0, 50, 100, 150]`
+**Dataset provenance:**
+
+* **Underlying dataset:** BraTS 2019
+* **Processed dataset:** Brain 2D MRI Images and Mask
+* **Kaggle:** `balakrishcodes/brain-2d-mri-imgs-and-mask`
+* **Format:** HDF5 (`.h5`)
+* **Input modality:** 2D FLAIR MRI
+* **Total samples:** 4,715
+* **Image resolution:** 240 × 240
+* **Input channels:** 1
+* **Output channels:** 1
+* **Split:** 80% training / 20% validation
+* **Training samples:** 3,772
+* **Validation samples:** 943
+
+### Dataset statistics
+
+| Property          | Value     |
+| ----------------- | --------- |
+| Total slices      | 4,715     |
+| Image resolution  | 240 × 240 |
+| Training slices   | 3,772     |
+| Validation slices | 943       |
+| Split             | 80/20     |
+| Input channels    | 1         |
+| Output channels   | 1         |
+
+The segmentation masks contain multiple non-zero tumor labels: `[0, 50, 100, 150]`.
 
 For this binary segmentation experiment, all non-zero pixels are treated as tumor.
 
 The dataset is not included in this repository.
+
 
 ---
 
