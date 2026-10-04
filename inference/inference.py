@@ -1,4 +1,3 @@
-
 import argparse
 import h5py
 import numpy as np
@@ -21,7 +20,7 @@ def preprocess(image):
 
 
 def predict(session, image):
-    """Run INT8 ONNX inference."""
+    """Run ONNX inference."""
     input_name = session.get_inputs()[0].name
 
     output = session.run(
@@ -66,6 +65,7 @@ def save_result(
     ground_truth,
     prediction,
     dice,
+    model_type,
     output_path
 ):
     """Save MRI, ground truth and prediction comparison."""
@@ -86,22 +86,24 @@ def save_result(
 
     plt.subplot(1, 3, 3)
     plt.imshow(prediction, cmap="gray")
-    plt.title(f"INT8 Prediction — Dice {dice * 100:.2f}%")
+    plt.title(f"{model_type} Prediction - Dice {dice * 100:.2f}%")
     plt.axis("off")
 
     plt.tight_layout()
+
     plt.savefig(
         output_path,
         dpi=200,
         bbox_inches="tight"
     )
+
     plt.close()
 
 
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Brain Tumor Segmentation using INT8 ONNX U-Net"
+        description="Brain Tumor Segmentation using ONNX U-Net"
     )
 
     parser.add_argument(
@@ -121,7 +123,14 @@ def main():
 
     args = parser.parse_args()
 
-    print("Loading INT8 ONNX model...")
+    model_type = (
+        "INT8"
+        if "int8" in args.model.lower()
+        else "FP32"
+    )
+
+    print(f"Loading {model_type} ONNX model...")
+    print(f"Model path: {args.model}")
 
     session = ort.InferenceSession(
         args.model,
@@ -153,7 +162,10 @@ def main():
 
     print("Prediction completed.")
     print("Predicted tumor pixels:", int(prediction.sum()))
-    print("Ground-truth tumor pixels:", int(ground_truth_binary.sum()))
+    print(
+        "Ground-truth tumor pixels:",
+        int(ground_truth_binary.sum())
+    )
     print(f"Dice score: {dice * 100:.2f}%")
 
     save_result(
@@ -161,6 +173,7 @@ def main():
         ground_truth,
         prediction,
         dice,
+        model_type,
         args.output
     )
 
