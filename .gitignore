@@ -24,3 +24,10 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local development / AI coding tools
+.agents/
+skills/
+
+# Presentations / generated presentation assets
+Presentations/
