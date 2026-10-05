@@ -180,7 +180,7 @@ DEFAULT_DATASET_ROOT = r"C:\Users\SUBHAM\Desktop\IEEE_Dataset\extracted"
 
 
 # ==============================================================================
-# CACHED MODEL LOADER
+# CACHED MODEL LOADERS
 # ==============================================================================
 @st.cache_resource(show_spinner=False)
 def load_int8_session():
@@ -194,6 +194,24 @@ def load_int8_session():
     options.intra_op_num_threads = 4
     session = ort.InferenceSession(
         str(INT8_MODEL_PATH),
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
+    )
+    return session
+
+
+@st.cache_resource(show_spinner=False)
+def load_fp32_session():
+    """Load and cache the baseline FP32 ONNX Runtime session."""
+    if not FP32_MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"FP32 ONNX model not found at: {FP32_MODEL_PATH}"
+        )
+
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 4
+    session = ort.InferenceSession(
+        str(FP32_MODEL_PATH),
         sess_options=options,
         providers=["CPUExecutionProvider"],
     )
@@ -290,15 +308,36 @@ def compute_dice(pred_mask, gt_mask):
     return float(dice)
 
 
+def compute_parity(fp32_mask, int8_mask):
+    """
+    Calculate numerical parity between FP32 baseline and INT8 edge predictions.
+    Note: Numerical parity reflects exact algorithmic alignment under quantization,
+    not medical or clinical equivalence.
+    """
+    total_pixels = int(fp32_mask.size)
+    identical_pixels = int((fp32_mask == int8_mask).sum())
+    differing_pixels = int((fp32_mask != int8_mask).sum())
+    parity_pct = (identical_pixels / total_pixels) * 100.0
+    differing_pct = (differing_pixels / total_pixels) * 100.0
+
+    return {
+        "total_pixels": total_pixels,
+        "identical_pixels": identical_pixels,
+        "differing_pixels": differing_pixels,
+        "parity_pct": parity_pct,
+        "differing_pct": differing_pct,
+    }
+
+
 # ==============================================================================
 # VISUALIZATION BUILDERS
 # ==============================================================================
-def create_four_panel_figure(image, gt_mask, pred_mask):
+def create_four_panel_figure(image, gt_mask, pred_mask, model_label="INT8"):
     """
     Construct presentation-quality 4-panel centerpiece:
     1. Original MRI (Grayscale)
     2. Ground Truth Mask
-    3. INT8 Model Prediction
+    3. Model Prediction (INT8 or FP32)
     4. Diagnostic Error / Segmentation Overlay
     """
     # Normalize MRI to [0, 1] for visual display
@@ -334,21 +373,22 @@ def create_four_panel_figure(image, gt_mask, pred_mask):
     )
     axes[0, 1].axis("off")
 
-    # Panel 3: INT8 ONNX Prediction
+    # Panel 3: Model Prediction
     axes[1, 0].imshow(img_norm, cmap="gray", interpolation="nearest")
     pred_colored = np.zeros((*pred_mask.shape, 4))
-    pred_colored[pred_mask == 1] = [
-        0.0,
-        0.95,
-        0.65,
-        0.75,
-    ]  # Neon Emerald/Cyan
+    if model_label == "FP32":
+        pred_colored[pred_mask == 1] = [0.2, 0.65, 1.0, 0.75]  # Cyan / Blue
+        label_color = "#58a6ff"
+    else:
+        pred_colored[pred_mask == 1] = [0.0, 0.95, 0.65, 0.75]  # Neon Emerald
+        label_color = "#3fb950"
+
     axes[1, 0].imshow(pred_colored, interpolation="nearest")
     pred_pixels = int(pred_mask.sum())
     axes[1, 0].set_title(
-        f"3. INT8 PREDICTION ({pred_pixels:,} px)",
+        f"3. {model_label} PREDICTION ({pred_pixels:,} px)",
         fontsize=13,
-        color="#3fb950",
+        color=label_color,
         fontweight="bold",
         pad=10,
     )
@@ -405,6 +445,146 @@ def create_four_panel_figure(image, gt_mask, pred_mask):
             label=f"False Negative ({fn.sum():,})",
             markerfacecolor="#3399FF",
             markersize=10,
+        ),
+    ]
+    axes[1, 1].legend(
+        handles=legend_elements,
+        loc="lower left",
+        fontsize=9,
+        facecolor="#161b22",
+        edgecolor="#30363d",
+        labelcolor="#e6edf3",
+    )
+
+    plt.tight_layout(pad=2.0)
+    return fig
+
+
+def create_side_by_side_figure(
+    image,
+    gt_mask,
+    fp32_pred,
+    int8_pred,
+    dice_fp32=None,
+    dice_int8=None,
+    fp32_latency=None,
+    int8_latency=None,
+):
+    """
+    Construct presentation-quality 4-panel Side-by-Side Comparison:
+    1. Original MRI (FLAIR) + Ground Truth
+    2. FP32 Baseline Prediction (Cyan)
+    3. INT8 Edge Prediction (Emerald)
+    4. Model Parity & Discrepancy Map
+    """
+    img_norm = image - image.min()
+    if img_norm.max() > 0:
+        img_norm = img_norm / img_norm.max()
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 11), facecolor="#0d1117")
+
+    # Panel 1: Original MRI + Ground Truth
+    axes[0, 0].imshow(img_norm, cmap="gray", interpolation="nearest")
+    gt_colored = np.zeros((*gt_mask.shape, 4))
+    gt_colored[gt_mask == 1] = [1.0, 0.2, 0.35, 0.75]  # Crimson
+    axes[0, 0].imshow(gt_colored, interpolation="nearest")
+    gt_pixels = int(gt_mask.sum())
+    axes[0, 0].set_title(
+        f"1. MRI + GROUND TRUTH ({gt_pixels:,} px)",
+        fontsize=13,
+        color="#ff7b72",
+        fontweight="bold",
+        pad=10,
+    )
+    axes[0, 0].axis("off")
+
+    # Panel 2: FP32 Baseline Prediction
+    axes[0, 1].imshow(img_norm, cmap="gray", interpolation="nearest")
+    fp32_colored = np.zeros((*fp32_pred.shape, 4))
+    fp32_colored[fp32_pred == 1] = [0.2, 0.65, 1.0, 0.75]  # Cyan / Blue
+    axes[0, 1].imshow(fp32_colored, interpolation="nearest")
+    fp32_pixels = int(fp32_pred.sum())
+    fp32_title = f"2. FP32 BASELINE ({fp32_pixels:,} px)"
+    if dice_fp32 is not None and fp32_latency is not None:
+        fp32_title += f"\nDice: {dice_fp32 * 100:.2f}% | Latency: {fp32_latency:.1f} ms"
+    axes[0, 1].set_title(
+        fp32_title,
+        fontsize=12,
+        color="#58a6ff",
+        fontweight="bold",
+        pad=10,
+    )
+    axes[0, 1].axis("off")
+
+    # Panel 3: INT8 Edge Prediction
+    axes[1, 0].imshow(img_norm, cmap="gray", interpolation="nearest")
+    int8_colored = np.zeros((*int8_pred.shape, 4))
+    int8_colored[int8_pred == 1] = [0.0, 0.95, 0.65, 0.75]  # Neon Emerald
+    axes[1, 0].imshow(int8_colored, interpolation="nearest")
+    int8_pixels = int(int8_pred.sum())
+    int8_title = f"3. INT8 EDGE MODEL ({int8_pixels:,} px)"
+    if dice_int8 is not None and int8_latency is not None:
+        int8_title += f"\nDice: {dice_int8 * 100:.2f}% | Latency: {int8_latency:.1f} ms"
+    axes[1, 0].set_title(
+        int8_title,
+        fontsize=12,
+        color="#3fb950",
+        fontweight="bold",
+        pad=10,
+    )
+    axes[1, 0].axis("off")
+
+    # Panel 4: Model Parity & Discrepancy Map
+    # Agreement: Both detect tumor (Emerald)
+    # Discrepancy: INT8 only (Orange), FP32 only (Blue)
+    axes[1, 1].imshow(img_norm, cmap="gray", interpolation="nearest")
+    both_tumor = np.logical_and(fp32_pred == 1, int8_pred == 1)
+    int8_only = np.logical_and(fp32_pred == 0, int8_pred == 1)
+    fp32_only = np.logical_and(fp32_pred == 1, int8_pred == 0)
+
+    diff_overlay = np.zeros((*image.shape, 4))
+    diff_overlay[both_tumor] = [0.0, 0.95, 0.45, 0.85]  # Both: Vivid Green
+    diff_overlay[int8_only] = [1.0, 0.55, 0.0, 0.90]    # INT8 Only: Orange
+    diff_overlay[fp32_only] = [0.2, 0.60, 1.0, 0.90]    # FP32 Only: Blue
+
+    axes[1, 1].imshow(diff_overlay, interpolation="nearest")
+    total_diff = int(int8_only.sum() + fp32_only.sum())
+    axes[1, 1].set_title(
+        f"4. MODEL PARITY MAP ({total_diff:,} diff px)",
+        fontsize=12,
+        color="#00E5FF",
+        fontweight="bold",
+        pad=10,
+    )
+    axes[1, 1].axis("off")
+
+    legend_elements = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="w",
+            label=f"Both Agree ({both_tumor.sum():,})",
+            markerfacecolor="#00F273",
+            markersize=9,
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="w",
+            label=f"INT8 Only ({int8_only.sum():,})",
+            markerfacecolor="#FF8C00",
+            markersize=9,
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="w",
+            label=f"FP32 Only ({fp32_only.sum():,})",
+            markerfacecolor="#3399FF",
+            markersize=9,
         ),
     ]
     axes[1, 1].legend(
@@ -671,12 +851,23 @@ if current_image is not None:
             unsafe_allow_html=True,
         )
         st.write(
-            "Click below to execute real-time INT8 inference through ONNX Runtime on CPU. "
-            "High-resolution timers will measure the latency and frame rate."
+            "Select model execution mode and click below to run real-time inference through ONNX Runtime on CPU. "
+            "High-resolution timers will measure runtime latency and throughput."
+        )
+
+        model_mode = st.radio(
+            "Model Execution Mode",
+            options=[
+                "INT8 — Edge Optimized (Default)",
+                "FP32 — Baseline Precision",
+                "Side-by-Side Comparison",
+            ],
+            index=0,
+            help="Choose between edge INT8 model, FP32 baseline, or dual side-by-side comparison.",
         )
 
         st.markdown("<br>", unsafe_allow_html=True)
-        run_inference_btn = st.button("🚀 RUN EDGE INFERENCE", use_container_width=True)
+        run_inference_btn = st.button("🚀 RUN INFERENCE", use_container_width=True)
 
         if not run_inference_btn:
             st.info("Awaiting execution trigger...")
@@ -686,89 +877,361 @@ if current_image is not None:
     # ==========================================================================
     if run_inference_btn:
         try:
-            with st.spinner("Running INT8 Edge Inference on CPU..."):
-                session = load_int8_session()
-                pred_mask, probabilities, latency_ms, fps = run_edge_inference(
-                    session, current_image
-                )
-                dice = compute_dice(pred_mask, current_gt)
-                pred_pixels = int(pred_mask.sum())
-                gt_pixels = int(current_gt.sum())
+            if model_mode == "INT8 — Edge Optimized (Default)":
+                with st.spinner("Running INT8 Edge Inference on CPU..."):
+                    session = load_int8_session()
+                    pred_mask, probabilities, latency_ms, fps = run_edge_inference(
+                        session, current_image
+                    )
+                    dice = compute_dice(pred_mask, current_gt)
+                    pred_pixels = int(pred_mask.sum())
+                    gt_pixels = int(current_gt.sum())
 
-            # Status Completion Badge
-            st.markdown(
-                f"""
-            <div style="margin: 16px 0;">
-                <span class="status-badge">✓ INT8 Edge Inference Completed in {latency_ms:.2f} ms ({fps:.1f} FPS)</span>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-            # Quantitative Results Cards
-            st.markdown(
-                """
-            <div class="section-title">
-                <span>📊</span> 4. Segmentation Performance (Live Evaluation)
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-            res1, res2, res3, res4, res5, res6 = st.columns(6)
-            with res1:
-                st.metric("Dice Score", f"{dice * 100:.2f} %")
-            with res2:
-                st.metric("Predicted Pixels", f"{pred_pixels:,}")
-            with res3:
-                st.metric("Ground Truth Pixels", f"{gt_pixels:,}")
-            with res4:
-                st.metric("Latency", f"{latency_ms:.2f} ms")
-            with res5:
-                st.metric("Throughput", f"{fps:.1f} FPS")
-            with res6:
-                st.metric("INT8 Model Size", f"{int8_mb:.2f} MB")
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # Centerpiece 4-Panel Visualization
-            st.markdown(
-                """
-            <div class="section-title">
-                <span>🖼️</span> 5. Visual Segmentation Centerpiece
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-            vis_col1, vis_col2 = st.columns([2.5, 1])
-
-            with vis_col1:
-                fig_center = create_four_panel_figure(
-                    current_image, current_gt, pred_mask
-                )
-                st.pyplot(fig_center, use_container_width=True)
-                plt.close(fig_center)
-
-            with vis_col2:
+                # Status Completion Badge
                 st.markdown(
-                    """
-                <div class="section-title" style="font-size: 15px;">
-                    <span>🔍</span> Model Probability Map
+                    f"""
+                <div style="margin: 16px 0;">
+                    <span class="status-badge">✓ INT8 Edge Inference Completed in {latency_ms:.2f} ms ({fps:.1f} FPS)</span>
                 </div>
                 """,
                     unsafe_allow_html=True,
                 )
-                fig_prob = create_probability_figure(probabilities)
-                st.pyplot(fig_prob, use_container_width=True)
-                plt.close(fig_prob)
-                st.caption(
-                    "Sigmoid activation values [0.0, 1.0] before binary thresholding at 0.5. "
-                    "Reflects raw neural network response (not medically calibrated)."
+
+                # Quantitative Results Cards
+                st.markdown(
+                    """
+                <div class="section-title">
+                    <span>📊</span> 4. Segmentation Performance (Live Evaluation)
+                </div>
+                """,
+                    unsafe_allow_html=True,
                 )
+
+                res1, res2, res3, res4, res5, res6 = st.columns(6)
+                with res1:
+                    st.metric("Dice Score", f"{dice * 100:.2f} %")
+                with res2:
+                    st.metric("Predicted Pixels", f"{pred_pixels:,}")
+                with res3:
+                    st.metric("Ground Truth Pixels", f"{gt_pixels:,}")
+                with res4:
+                    st.metric("Latency", f"{latency_ms:.2f} ms")
+                with res5:
+                    st.metric("Throughput", f"{fps:.1f} FPS")
+                with res6:
+                    st.metric("INT8 Model Size", f"{int8_mb:.2f} MB")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Centerpiece 4-Panel Visualization
+                st.markdown(
+                    """
+                <div class="section-title">
+                    <span>🖼️</span> 5. Visual Segmentation Centerpiece
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                vis_col1, vis_col2 = st.columns([2.5, 1])
+
+                with vis_col1:
+                    fig_center = create_four_panel_figure(
+                        current_image, current_gt, pred_mask, model_label="INT8"
+                    )
+                    st.pyplot(fig_center, use_container_width=True)
+                    plt.close(fig_center)
+
+                with vis_col2:
+                    st.markdown(
+                        """
+                    <div class="section-title" style="font-size: 15px;">
+                        <span>🔍</span> Model Probability Map
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+                    fig_prob = create_probability_figure(probabilities)
+                    st.pyplot(fig_prob, use_container_width=True)
+                    plt.close(fig_prob)
+                    st.caption(
+                        "Sigmoid activation values [0.0, 1.0] before binary thresholding at 0.5. "
+                        "Reflects raw neural network response (not medically calibrated)."
+                    )
+
+            elif model_mode == "FP32 — Baseline Precision":
+                with st.spinner("Running FP32 Baseline Inference on CPU..."):
+                    try:
+                        session = load_fp32_session()
+                        is_fallback = False
+                    except Exception as exc:
+                        st.warning(f"Could not load FP32 model ({exc}). Falling back to INT8.")
+                        session = load_int8_session()
+                        is_fallback = True
+
+                    pred_mask, probabilities, latency_ms, fps = run_edge_inference(
+                        session, current_image
+                    )
+                    dice = compute_dice(pred_mask, current_gt)
+                    pred_pixels = int(pred_mask.sum())
+                    gt_pixels = int(current_gt.sum())
+                    current_mb = int8_mb if is_fallback else fp32_mb
+                    label_str = "INT8 (Fallback)" if is_fallback else "FP32 Baseline"
+
+                # Status Completion Badge
+                st.markdown(
+                    f"""
+                <div style="margin: 16px 0;">
+                    <span class="status-badge" style="border-color: #58a6ff; color: #58a6ff; background: rgba(88, 166, 255, 0.15);">✓ {label_str} Inference Completed in {latency_ms:.2f} ms ({fps:.1f} FPS)</span>
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                # Quantitative Results Cards
+                st.markdown(
+                    """
+                <div class="section-title">
+                    <span>📊</span> 4. Segmentation Performance (Live Evaluation)
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                res1, res2, res3, res4, res5, res6 = st.columns(6)
+                with res1:
+                    st.metric("Dice Score", f"{dice * 100:.2f} %")
+                with res2:
+                    st.metric("Predicted Pixels", f"{pred_pixels:,}")
+                with res3:
+                    st.metric("Ground Truth Pixels", f"{gt_pixels:,}")
+                with res4:
+                    st.metric("Latency", f"{latency_ms:.2f} ms")
+                with res5:
+                    st.metric("Throughput", f"{fps:.1f} FPS")
+                with res6:
+                    st.metric("Model Size", f"{current_mb:.2f} MB")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Centerpiece 4-Panel Visualization
+                st.markdown(
+                    """
+                <div class="section-title">
+                    <span>🖼️</span> 5. Visual Segmentation Centerpiece
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                vis_col1, vis_col2 = st.columns([2.5, 1])
+
+                with vis_col1:
+                    fig_center = create_four_panel_figure(
+                        current_image, current_gt, pred_mask, model_label="FP32"
+                    )
+                    st.pyplot(fig_center, use_container_width=True)
+                    plt.close(fig_center)
+
+                with vis_col2:
+                    st.markdown(
+                        """
+                    <div class="section-title" style="font-size: 15px;">
+                        <span>🔍</span> Model Probability Map
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+                    fig_prob = create_probability_figure(probabilities)
+                    st.pyplot(fig_prob, use_container_width=True)
+                    plt.close(fig_prob)
+                    st.caption(
+                        "Sigmoid activation values [0.0, 1.0] before binary thresholding at 0.5. "
+                        "Reflects raw neural network response (not medically calibrated)."
+                    )
+
+            else:  # Side-by-Side Comparison
+                with st.spinner("Running Dual FP32 & INT8 Inference on CPU..."):
+                    session_int8 = load_int8_session()
+                    pred_int8, prob_int8, lat_int8, fps_int8 = run_edge_inference(
+                        session_int8, current_image
+                    )
+                    dice_int8 = compute_dice(pred_int8, current_gt)
+
+                    fp32_loaded = True
+                    try:
+                        session_fp32 = load_fp32_session()
+                        pred_fp32, prob_fp32, lat_fp32, fps_fp32 = run_edge_inference(
+                            session_fp32, current_image
+                        )
+                        dice_fp32 = compute_dice(pred_fp32, current_gt)
+                    except Exception as exc:
+                        st.warning(f"Could not execute FP32 baseline ({exc}). Comparing INT8 only.")
+                        pred_fp32, prob_fp32, lat_fp32, fps_fp32 = pred_int8, prob_int8, lat_int8, fps_int8
+                        dice_fp32 = dice_int8
+                        fp32_loaded = False
+
+                    speedup = (lat_fp32 / lat_int8) if lat_int8 > 0 else 1.0
+                    lat_reduction = ((lat_fp32 - lat_int8) / lat_fp32 * 100.0) if lat_fp32 > 0 else 0.0
+                    parity = compute_parity(pred_fp32, pred_int8)
+
+                # Status Completion Badge
+                st.markdown(
+                    f"""
+                <div style="margin: 16px 0;">
+                    <span class="status-badge">✓ Dual Inference Completed: INT8 ({lat_int8:.2f} ms) vs FP32 ({lat_fp32:.2f} ms) — {speedup:.2f}× Speedup (↓ {lat_reduction:.1f}% Latency)</span>
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                # Section 4: Live Model Comparison Table & Cards
+                st.markdown(
+                    """
+                <div class="section-title">
+                    <span>⚖️</span> 4. FP32 vs Static INT8 Comparative Benchmark (Live Execution)
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                comp_col1, comp_col2, comp_col3 = st.columns(3)
+
+                with comp_col1:
+                    st.markdown(
+                        f"""
+                    <div class="metric-card" style="border-left: 3px solid #58a6ff;">
+                        <div class="metric-label">FP32 Baseline</div>
+                        <div style="margin-top: 8px;">
+                            <span style="color: #8b949e; font-size: 13px;">Latency:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {lat_fp32:.2f} ms</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Throughput:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {fps_fp32:.1f} FPS</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Model Size:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {fp32_mb:.2f} MB</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Slice Dice:</span>
+                            <strong style="color: #58a6ff; font-size: 16px;"> {dice_fp32 * 100:.2f} %</strong>
+                        </div>
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+
+                with comp_col2:
+                    st.markdown(
+                        f"""
+                    <div class="metric-card" style="border-left: 3px solid #3fb950;">
+                        <div class="metric-label">INT8 Edge Model</div>
+                        <div style="margin-top: 8px;">
+                            <span style="color: #8b949e; font-size: 13px;">Latency:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {lat_int8:.2f} ms</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Throughput:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {fps_int8:.1f} FPS</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Model Size:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {int8_mb:.2f} MB</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Slice Dice:</span>
+                            <strong style="color: #3fb950; font-size: 16px;"> {dice_int8 * 100:.2f} %</strong>
+                        </div>
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+
+                with comp_col3:
+                    st.markdown(
+                        f"""
+                    <div class="metric-card" style="border-left: 3px solid #00E5FF;">
+                        <div class="metric-label">Edge Optimization Delta</div>
+                        <div style="margin-top: 8px;">
+                            <span style="color: #8b949e; font-size: 13px;">Speedup:</span>
+                            <strong style="color: #00E5FF; font-size: 16px;"> {speedup:.2f}×</strong>
+                            <span style="color: #3fb950; font-size: 12px;"> (↓ {lat_reduction:.1f}%)</span>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Storage Saved:</span>
+                            <strong style="color: #3fb950; font-size: 16px;"> ↓ {size_reduction:.1f}%</strong>
+                            <span style="color: #8b949e; font-size: 12px;"> ({fp32_mb - int8_mb:.2f} MB)</span>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Prediction Parity:</span>
+                            <strong style="color: #00E5FF; font-size: 16px;"> {parity['parity_pct']:.2f} %</strong>
+                        </div>
+                        <div style="margin-top: 4px;">
+                            <span style="color: #8b949e; font-size: 13px;">Differing Pixels:</span>
+                            <strong style="color: #f0f6fc; font-size: 16px;"> {parity['differing_pixels']:,} / {parity['total_pixels']:,}</strong>
+                            <span style="color: #8b949e; font-size: 12px;"> ({parity['differing_pct']:.3f}%)</span>
+                        </div>
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+
+                st.caption(
+                    "ℹ️ Prediction parity measures exact pixel-level agreement between the FP32 baseline and "
+                    "static INT8 quantized model. Numerical parity demonstrates algorithmic preservation under "
+                    "edge quantization; it does not denote clinical equivalence."
+                )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Centerpiece Side-by-Side Visualization
+                st.markdown(
+                    """
+                <div class="section-title">
+                    <span>🖼️</span> 5. Visual Segmentation Side-by-Side Centerpiece
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
+
+                vis_col1, vis_col2 = st.columns([2.5, 1])
+
+                with vis_col1:
+                    fig_sbs = create_side_by_side_figure(
+                        current_image,
+                        current_gt,
+                        pred_fp32,
+                        pred_int8,
+                        dice_fp32=dice_fp32,
+                        dice_int8=dice_int8,
+                        fp32_latency=lat_fp32,
+                        int8_latency=lat_int8,
+                    )
+                    st.pyplot(fig_sbs, use_container_width=True)
+                    plt.close(fig_sbs)
+
+                with vis_col2:
+                    st.markdown(
+                        """
+                    <div class="section-title" style="font-size: 15px;">
+                        <span>🔍</span> INT8 Probability Map
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+                    fig_prob = create_probability_figure(prob_int8)
+                    st.pyplot(fig_prob, use_container_width=True)
+                    plt.close(fig_prob)
+                    st.caption(
+                        "INT8 sigmoid confidence map before thresholding. "
+                        "Reflects pixel-wise tumor activation on edge hardware."
+                    )
 
         except Exception as e:
             st.error(f"Inference execution failed: {e}")
+
 
 else:
     st.info(
