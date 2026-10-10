@@ -9,6 +9,8 @@ __pycache__/
 # Dataset
 data/
 *.h5
+evaluation_data/
+*.nii
 
 # Local PyTorch checkpoint
 models/brats_unet_modell.pth

@@ -200,35 +200,80 @@ def save_result(
     model_type,
     output_path
 ):
-    """Save MRI, ground truth and prediction comparison."""
+    """Save separate MRI, Ground Truth + Prediction images for PPT."""
 
     ground_truth_binary = (
         ground_truth > 0
     ).astype(np.uint8)
 
-    plt.figure(figsize=(15, 5))
+    # ---------------------------------------------------------
+    # 1. Save MRI INPUT separately
+    # ---------------------------------------------------------
 
-    plt.subplot(1, 3, 1)
+    output_dir = os.path.dirname(output_path)
+
+    if output_dir == "":
+        output_dir = "."
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    mri_path = os.path.join(
+        output_dir,
+        "MRI.png"
+    )
+
+    plt.figure(figsize=(6, 6))
 
     plt.imshow(
         image,
         cmap="gray"
     )
 
-    plt.title("MRI")
+    plt.title(
+        "MRI",
+        fontsize=20,
+        pad=12
+    )
+
     plt.axis("off")
 
-    plt.subplot(1, 3, 2)
+    plt.tight_layout()
+
+    plt.savefig(
+        mri_path,
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close()
+
+    # ---------------------------------------------------------
+    # 2. Save Ground Truth + Prediction
+    # ---------------------------------------------------------
+
+    result_path = output_path
+
+    plt.figure(figsize=(12, 6))
+
+    # Ground Truth
+    plt.subplot(1, 2, 1)
 
     plt.imshow(
         ground_truth_binary,
         cmap="gray"
     )
 
-    plt.title("Ground Truth")
+    plt.title(
+        "Ground Truth",
+        fontsize=20,
+        pad=12
+    )
+
     plt.axis("off")
 
-    plt.subplot(1, 3, 3)
+    # Prediction
+    plt.subplot(1, 2, 2)
 
     plt.imshow(
         prediction,
@@ -237,7 +282,9 @@ def save_result(
 
     plt.title(
         f"{model_type} Prediction - "
-        f"Dice {dice * 100:.2f}%"
+        f"Dice {dice * 100:.2f}%",
+        fontsize=20,
+        pad=12
     )
 
     plt.axis("off")
@@ -245,12 +292,17 @@ def save_result(
     plt.tight_layout()
 
     plt.savefig(
-        output_path,
-        dpi=200,
-        bbox_inches="tight"
+        result_path,
+        dpi=300,
+        bbox_inches="tight",
+        facecolor="white"
     )
 
     plt.close()
+
+    print()
+    print("Saved MRI       :", mri_path)
+    print(f"Saved {model_type} result :", result_path)
 
 
 # ---------------------------------------------------------

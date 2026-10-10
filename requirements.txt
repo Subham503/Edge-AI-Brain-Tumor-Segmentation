@@ -4,3 +4,5 @@ matplotlib
 onnx
 onnxruntime
 streamlit
+pandas
+psutil
